@@ -1,15 +1,15 @@
-import openni
+from openni import openni2
 import cv2
 import numpy as np
 import open3d as o3d
 
 # ===================== 初始化 =====================
-openni.initialize()
+openni2.initialize()
 print("✅ OpenNI2 初始化成功")
 
 try:
     # 打开相机
-    device = openni.Device.open_any()
+    device = openni2.Device.open_any()
     print(f"✅ 相机已连接: {device.get_device_info().name}")
 
     # 创建数据流
@@ -17,19 +17,19 @@ try:
     color_stream = device.create_color_stream()
 
     # 配置分辨率 640x480
-    depth_stream.set_video_mode(openni.VideoMode(
-        pixel_format=openni.PIXEL_FORMAT_DEPTH_1_MM,
+    depth_stream.set_video_mode(openni2.VideoMode(
+        pixel_format=openni2.PIXEL_FORMAT_DEPTH_1_MM,
         width=640, height=480, fps=30
     ))
     color_stream.set_video_mode(openni.VideoMode(
-        pixel_format=openni.PIXEL_FORMAT_RGB888,
+        pixel_format=openni2.PIXEL_FORMAT_RGB888,
         width=640, height=480, fps=30
     ))
 
     # 启动 + 图像对齐
     depth_stream.start()
     color_stream.start()
-    device.set_image_registration_mode(openni.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
+    device.set_image_registration_mode(openni2.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
 
     # 相机内参（大白Pro默认）
     intrinsic = o3d.camera.PinholeCameraIntrinsic(640,480, 570,570,320,240)
@@ -84,7 +84,7 @@ finally:
     # 释放资源
     depth_stream.stop()
     color_stream.stop()
-    openni.shutdown()
+    openni2.shutdown()
     cv2.destroyAllWindows()
     vis.destroy_window()
     print("✅ 程序安全退出")

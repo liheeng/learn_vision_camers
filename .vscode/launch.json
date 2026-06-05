@@ -1,0 +1,22 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+        "configurations": [
+        {
+            "name": "Project File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            // 👇 关键在这里
+            "cwd": "${workspaceFolder}",  // 工作区根目录
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/app",
+            }
+            // "cwd": "${fileDirname}"    // 当前文件所在目录（最常用）
+            // "cwd": "/data/project"     // 绝对路径
+        }
+    ]
+}

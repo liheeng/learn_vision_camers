@@ -58,7 +58,7 @@ try:
     if device_list.get_count() == 0:
         raise RuntimeError("未检测到 Orbbec 设备")
 
-    device = device_list.get_device(0)
+    device = device_list.get_device_by_index(0)
     print(f"✅ 设备: {device.get_device_info().get_name()}")
 
     pipeline = Pipeline(device)
