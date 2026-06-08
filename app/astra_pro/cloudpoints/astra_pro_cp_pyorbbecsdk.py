@@ -8,19 +8,18 @@ import numpy as np
 import open3d as o3d
 from pyorbbecsdk import Context, Pipeline, Config, OBSensorType
 
-# Astra Pro 640x480 深度相机内参
+# Astra Pro 640x480 深度相机内参（与 OpenNI2 版一致）
 INTRINSICS = np.array([
-    [570.3, 0, 320],
-    [0, 570.3, 240],
+    [525.0, 0, 319.5],
+    [0, 525.0, 239.5],
     [0, 0, 1]
 ], dtype=np.float64)
 
 
-def depth_to_pointcloud(depth_mm, intrinsic=INTRINSICS, stride=2):
-    """深度图（毫米）转点云 (N, 3)，单位米。stride=2 表示每 2 像素取 1 个，降低点数"""
-    h, w = depth_mm.shape
-    # 降采样
-    depth_small = depth_mm[::stride, ::stride]
+def depth_to_pointcloud(depth_raw, intrinsic=INTRINSICS, stride=1):
+    """深度图转点云 (N, 3)。自动适配 pyorbbecsdk（小值）和 OpenNI2（大值）"""
+    h, w = depth_raw.shape
+    depth_small = depth_raw[::stride, ::stride]
     sh, sw = depth_small.shape
     fx, fy = intrinsic[0, 0], intrinsic[1, 1]
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
@@ -29,15 +28,21 @@ def depth_to_pointcloud(depth_mm, intrinsic=INTRINSICS, stride=2):
     u = u.flatten()
     v = v.flatten()
 
-    z = depth_small.flatten().astype(np.float32) / 1000.0
-    mask = (z > 0.3) & (z < 5.0)
+    d = depth_small.flatten().astype(np.float32)
+    # 自动判断：小值（pyorbbecsdk）直接使用，大值（OpenNI2 mm）转米
+    d_max = d.max()
+    if d_max > 500:
+        z = d / 1000.0  # mm → m
+        mask = (z > 0.3) & (z < 3.0)
+    else:
+        z = d / d_max * 3.0 if d_max > 0 else d  # 归一化到 0-3m
+        mask = z > 0.01
 
-    # 像素坐标映射回原始分辨率
-    u_map = (u[mask] * stride + stride // 2)
-    v_map = (v[mask] * stride + stride // 2)
+    u_map = u[mask] * stride + stride // 2
+    v_map = v[mask] * stride + stride // 2
 
     x = (u_map - cx) * z[mask] / fx
-    y = (v_map - cy) * z[mask] / fy
+    y = -(v_map - cy) * z[mask] / fy
     return np.stack([x, y, z[mask]], axis=1)
 
 
@@ -78,15 +83,17 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    # Open3D 可视化
+    # Open3D
     vis = o3d.visualization.Visualizer()
     vis.create_window("Astra Pro Point Cloud (pyorbbecsdk)", width=800, height=600)
+    opt = vis.get_render_option()
+    opt.point_size = 5.0
+    opt.background_color = np.array([0.1, 0.1, 0.1])
     pcd = o3d.geometry.PointCloud()
-    view_initialized = False
+    view_init = False
 
-    # 跳帧：每 3 帧更新一次点云（提升性能）
-    frame_skip = 0
     cv2.namedWindow("Depth Preview", cv2.WINDOW_NORMAL)
+    frame_count = 0
 
     try:
         while True:
@@ -104,56 +111,81 @@ def main():
                 raw = df.get_data()
                 if len(raw) != w * h * 2:
                     continue
-
                 d_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
-                depth_mm = (d_u16.astype(np.float32) * df.get_depth_scale()).astype(np.uint16)
+                d_u16 = np.fliplr(d_u16)  # 水平翻转，对齐彩色摄像头
+                scale = df.get_depth_scale()
+                raw_max = float(d_u16.max())
+                if raw_max > 500:
+                    depth_mm = (d_u16.astype(np.float32) * scale).astype(np.uint16)
+                else:
+                    # 原始值过小（非 mm 单位），直接当作相对深度使用
+                    depth_mm = d_u16
             except Exception:
                 continue
 
-            frame_skip += 1
-            update_pc = (frame_skip % 3 == 0)
+            frame_count += 1
+            if frame_count <= 3:
+                print(f"Depth: min={depth_mm.min()} max={depth_mm.max()} "
+                      f"nz={np.count_nonzero(depth_mm)}")
 
-            # ---- 点云（跳帧更新） ----
-            if update_pc:
-                if frame_skip <= 6:
-                    print(f"Depth: min={depth_mm.min()} max={depth_mm.max()} "
-                          f"nz={np.count_nonzero(depth_mm)}")
-                    points = depth_to_pointcloud(depth_mm)
-                    print(f"  -> {len(points)} points")
-                else:
-                    points = depth_to_pointcloud(depth_mm)
+            # 每 2 帧更新点云
+            if frame_count % 2 == 0:
+                points = depth_to_pointcloud(depth_mm)
                 if len(points) > 0:
-                    # ---- 从彩色图取色 ----
+                    if frame_count <= 3:
+                        print(f"  -> {len(points)} points  "
+                              f"x=[{points[:,0].min():.2f},{points[:,0].max():.2f}]m "
+                              f"y=[{points[:,1].min():.2f},{points[:,1].max():.2f}]m "
+                              f"z=[{points[:,2].min():.2f},{points[:,2].max():.2f}]m")
+
+                    # 彩色着色
+                    pc_colors = None
                     ret, color_bgr = cap.read()
                     if ret:
-                        color_small = cv2.resize(color_bgr, (320, 240))
-                        color_rgb = cv2.cvtColor(color_small, cv2.COLOR_BGR2RGB)
-                        colors = color_rgb.reshape(-1, 3).astype(np.float32) / 255.0
-                        depth_small = depth_mm[::2, ::2]
-                        mask = (depth_small.flatten() > 300) & (depth_small.flatten() < 5000)
-                        colors = colors[mask]
-                        if len(colors) == len(points):
-                            pcd.colors = o3d.utility.Vector3dVector(colors)
+                        color_bgr = cv2.flip(color_bgr, 1)
+                        color_rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
+                        col = color_rgb.reshape(-1, 3).astype(np.float32) / 255.0
+                        mask = (depth_mm.flatten() > 300) & (depth_mm.flatten() < 3000)
+                        col = col[mask]
+                        if len(col) == len(points):
+                            pc_colors = o3d.utility.Vector3dVector(col)
 
-                    # ---- 更新 Open3D ----
-                    pcd.points = o3d.utility.Vector3dVector(points)
-                    vis.clear_geometries()
-                    vis.add_geometry(pcd)
+                    if view_init:
+                        pcd.points = o3d.utility.Vector3dVector(points)
+                        if pc_colors is not None:
+                            pcd.colors = pc_colors
+                        vis.update_geometry(pcd)
+                    else:
+                        pcd.points = o3d.utility.Vector3dVector(points)
+                        if pc_colors is not None:
+                            pcd.colors = pc_colors
+                        vis.add_geometry(pcd)
+                        bounds = pcd.get_axis_aligned_bounding_box()
+                        center = bounds.get_center()
+                        vc = vis.get_view_control()
+                        vc.set_front([0, 0, 1])
+                        vc.set_lookat(center)
+                        vc.set_up([0, 1, 0])
+                        vc.set_zoom(0.5)
+                        view_init = True
 
                 vis.poll_events()
                 vis.update_renderer()
+                if view_init:
+                    ctr = vis.get_view_control()
+                    ctr.rotate(0.3, 0)
 
-                if not view_initialized and len(points) > 0:
-                    vc = vis.get_view_control()
-                    vc.set_front([0, 0, -1])
-                    vc.set_lookat([0, 0, 1])
-                    vc.set_up([0, -1, 0])
-                    view_initialized = True
-
-            # ---- 深度图预览（每帧都更新） ----
-            cm = cv2.applyColorMap(
-                np.clip((depth_mm.astype(np.int32) - 500) * 255 // 7500, 0, 255).astype(np.uint8),
-                cv2.COLORMAP_JET)
+            # ---- 深度图预览（自适应） ----
+            d_disp = depth_mm.astype(np.float32)
+            nz = d_disp[d_disp > 0]
+            if len(nz) > 100:
+                lo, hi = float(nz.min()), float(nz.max())
+            else:
+                lo, hi = 0.0, 50.0
+            if hi <= lo:
+                hi = lo + 1.0
+            norm = np.clip((d_disp - lo) * 255.0 // (hi - lo), 0, 255).astype(np.uint8)
+            cm = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
             cm[depth_mm == 0] = (0, 0, 0)
             cv2.imshow("Depth Preview", cv2.resize(cm, (640, 480)))
 
