@@ -1,11 +1,15 @@
 # from primesense import openni2
+# Openni2 does not support Dabai Pro
+import os
+
 from openni import openni2
 import cv2
 import numpy as np
 
 # ===================== Orbbec Astra 深度 + 红外 =====================
-lib_path = "/home/henry/git/AI-Projects/OpenNI_2.3/sdk/libs"
-openni2.initialize()
+default_lib_path = "/home/henry/git/AI-Projects/vision_class/OpenNI_2.3.0/sdk/libs"
+lib_path = os.getenv("OPENNI2_REDIST") or os.environ.setdefault("OPENNI2_REDIST", default_lib_path)
+openni2.initialize(lib_path)
 print("✅ OpenNI2 初始化成功")
 
 try:
@@ -79,6 +83,8 @@ try:
 
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
+except Exception as e:
+    print(f"❌ 发生错误: {e}")
 
 finally:
     if 'depth_stream' in locals() and depth_stream is not None:
