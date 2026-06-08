@@ -14,7 +14,7 @@
             "cwd": "${workspaceFolder}",  // 工作区根目录
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/app",
-            }
+            },
             // "cwd": "${fileDirname}"    // 当前文件所在目录（最常用）
             // "cwd": "/data/project"     // 绝对路径
         }

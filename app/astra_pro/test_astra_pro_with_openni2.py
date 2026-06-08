@@ -104,9 +104,17 @@ if __name__ == "__main__":
 
             dpt2 *= 255
             dpt = dpt1 + dpt2
-            dim_gray = cv2.convertScaleAbs(dpt, alpha=ALPHA_VALUE)
-            # 对深度图像进行渲染
-            depth_colormap = cv2.applyColorMap(dim_gray, COLOR_MAP_TYPE)
+            # 自适应归一化（根据实际深度范围拉伸）
+            nz = dpt[dpt > 0]
+            if len(nz) > 100:
+                lo, hi = int(nz.min()), int(nz.max())
+            else:
+                lo, hi = 0, 8000
+            if hi <= lo:
+                hi = lo + 1
+            dim_gray = np.clip((dpt - lo) * 255 // (hi - lo), 0, 255).astype(np.uint8)
+            depth_colormap = cv2.applyColorMap(dim_gray, cv2.COLORMAP_JET)
+            depth_colormap[dpt == 0] = (0, 0, 0)
 
             if click_x >= 0 and click_y >= 0 and (time.time() - last_click_time) < 5:
                 depth_colormap = cv2.putText(depth_colormap, distance_text, (click_x, click_y), FONT, FONT_SCALE,
@@ -121,7 +129,8 @@ if __name__ == "__main__":
                     ir_frame = ir_stream.read_frame()
                     ir_data = np.array(ir_frame.get_buffer_as_uint16()).reshape([480, 640])
                     # normalize for display
-                    ir_display = cv2.normalize(ir_data, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+                    ir_norm = cv2.normalize(ir_data, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+                    ir_display = cv2.applyColorMap(ir_norm, cv2.COLORMAP_JET)
                     cv2.imshow(WINDOW_NAME_IR, ir_display)
                 except Exception:
                     pass
