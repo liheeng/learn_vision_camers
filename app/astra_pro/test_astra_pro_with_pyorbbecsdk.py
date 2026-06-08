@@ -1,8 +1,8 @@
 """
-pyorbbecsdk 预览（--mode depth | ir，默认 depth）
+pyorbbecsdk 预览（--mode depth | ir | both，默认 depth）
 
-由于 Astra Pro 不支持 Depth + IR 双流同时输出，一次只能选一个。
-三窗口同显请使用 OpenNI2: python app/astra_pro/test_astra_pro_with_openni2.py
+Depth + IR 无法硬件同步，FrameSet 交替到达。both 模式各自独立更新窗口。
+三窗口完美同显请使用 OpenNI2: python app/astra_pro/test_astra_pro_with_openni2.py
 """
 
 import cv2
@@ -11,10 +11,26 @@ import sys
 from pyorbbecsdk import Context, Pipeline, Config, OBSensorType
 
 
-def show_frame(win_name, img, scale=2.0):
+def show_frame(win_name, img, scale=1.0):
     """显示图像（自动缩放）"""
     h, w = img.shape[:2]
     cv2.imshow(win_name, cv2.resize(img, (int(w * scale), int(h * scale))))
+
+
+def show_ir(ir_data):
+    """显示 IR 帧（百分位裁剪 + JET 伪彩色）"""
+    nz = ir_data[ir_data > 0]
+    if len(nz) > 100:
+        lo = int(np.percentile(nz, 5))
+        hi = int(np.percentile(nz, 95))
+    else:
+        lo, hi = 0, 65535
+    if hi <= lo:
+        hi = lo + 1
+    norm = np.clip((ir_data.astype(np.int32) - lo) * 255 // (hi - lo),
+                   0, 255).astype(np.uint8)
+    cm = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+    show_frame("IR", cm)
 
 
 def normalize_display(data, lo=None, hi=None, colormap=cv2.COLORMAP_JET):
@@ -35,10 +51,10 @@ def normalize_display(data, lo=None, hi=None, colormap=cv2.COLORMAP_JET):
 
 def main():
     # 解析 --mode
-    mode = 'depth'
+    mode = 'both'
     if '--mode' in sys.argv:
         i = sys.argv.index('--mode')
-        if i + 1 < len(sys.argv) and sys.argv[i + 1] in ('depth', 'ir'):
+        if i + 1 < len(sys.argv) and sys.argv[i + 1] in ('depth', 'ir', 'both'):
             mode = sys.argv[i + 1]
 
     ctx = Context()
@@ -70,9 +86,9 @@ def main():
     dw, dh = dpi.get_width(), dpi.get_height()
     print(f"✅ Depth: {dw}x{dh}@{dpi.get_fps()}fps")
 
-    # IR 模式时启用 IR 流（同一分辨率 640x480）
+    # IR / both 模式时启用 IR 流（同一分辨率 640x480）
     ir_w = ir_h = 0
-    if mode == 'ir':
+    if mode in ('ir', 'both'):
         try:
             ir_profiles = pipeline.get_stream_profile_list(OBSensorType.IR_SENSOR)
             irp = None
@@ -104,53 +120,49 @@ def main():
             if frames is None:
                 continue
 
-            if mode == 'depth':
-                # ---- Depth 模式 ----
-                df = frames.get_depth_frame()
-                if df is not None:
-                    try:
-                        w, h = df.get_width(), df.get_height()
-                        raw = df.get_data()
-                        if len(raw) == w * h * 2:
-                            d = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
-                            d = (d.astype(np.float32) * df.get_depth_scale()).astype(np.uint16)
-                            cm = normalize_display(d, lo=500, hi=8000)
-                            cm[d == 0] = (0, 0, 0)
-                            show_frame("Depth", cm)
-                    except Exception:
-                        pass
+            # ---- Depth 窗口（所有模式都尝试更新） ----
+            df = frames.get_depth_frame()
+            if df is not None:
+                try:
+                    w, h = df.get_width(), df.get_height()
+                    raw = df.get_data()
+                    if len(raw) == w * h * 2:
+                        d = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
+                        d = (d.astype(np.float32) * df.get_depth_scale()).astype(np.uint16)
+                        cm = normalize_display(d, lo=500, hi=8000)
+                        cm[d == 0] = (0, 0, 0)
+                        show_frame("Depth", cm)
+                except Exception:
+                    pass
 
-            else:
-                # ---- IR 模式 ----
-                # 遍历 FrameSet 中的帧，找数据量匹配 IR 分辨率的帧
-                for fi in range(frames.get_frame_count()):
+            # ---- IR 窗口（ir / both 模式尝试更新） ----
+            if mode in ('ir', 'both'):
+                # 先试 get_ir_frame()
+                irf = frames.get_ir_frame()
+                if irf is not None:
                     try:
-                        f = frames.get_frame_by_index(fi)
-                        if f is None:
-                            continue
-                        raw = f.get_data()
-                        # Depth 和 IR 都是 640x480 16bit, 数据大小一样，无法区分
-                        # 但深度值范围极小 (0-50)，IR 值范围大 (0-65535)，
-                        # 所以 IR 模式的 FrameSet 中第一个帧通常就是 IR 数据
-                        if len(raw) == ir_w * ir_h * 2:
-                            ir = np.frombuffer(raw, dtype=np.uint16).reshape(ir_h, ir_w)
-                            # 如果值范围 > 200，很可能是 IR 而非 Depth
+                        w, h = irf.get_width(), irf.get_height()
+                        raw = irf.get_data()
+                        if len(raw) == w * h * 2:
+                            ir = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
                             if ir.max() > 200:
-                                # 使用百分位裁剪，避免低值纯蓝淹没细节
-                                nz = ir[ir > 0]
-                                if len(nz) > 100:
-                                    lo = int(np.percentile(nz, 5))
-                                    hi = int(np.percentile(nz, 95))
-                                else:
-                                    lo, hi = 0, 65535
-                                if hi <= lo:
-                                    hi = lo + 1
-                                norm = np.clip((ir.astype(np.int32) - lo) * 255 // (hi - lo),
-                                               0, 255).astype(np.uint8)
-                                cm = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
-                                show_frame("IR", cm)
+                                show_ir(ir)
                     except Exception:
                         pass
+                else:
+                    # 回退：遍历 FrameSet 找 IR 数据
+                    for fi in range(frames.get_frame_count()):
+                        try:
+                            f = frames.get_frame_by_index(fi)
+                            if f is None:
+                                continue
+                            raw = f.get_data()
+                            if len(raw) == ir_w * ir_h * 2:
+                                ir = np.frombuffer(raw, dtype=np.uint16).reshape(ir_h, ir_w)
+                                if ir.max() > 200:
+                                    show_ir(ir)
+                        except Exception:
+                            pass
 
             # Color (from OpenCV)
             ret, color_bgr = cap.read()
