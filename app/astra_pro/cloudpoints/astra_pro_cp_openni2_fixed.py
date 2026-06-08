@@ -92,32 +92,37 @@ def main():
                               f"z=[{points[:,2].min():.2f},{points[:,2].max():.2f}]m")
 
                     # 彩色着色
+                    pc_colors = None
                     ret, color_bgr = cap.read()
                     if ret:
                         color_rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
-                        colors = color_rgb.reshape(-1, 3).astype(np.float32) / 255.0
+                        col = color_rgb.reshape(-1, 3).astype(np.float32) / 255.0
                         mask = (depth_mm.flatten() > 300) & (depth_mm.flatten() < 3000)
-                        colors = colors[mask]
-                        if len(colors) == len(points):
-                            pcd.colors = o3d.utility.Vector3dVector(colors)
+                        col = col[mask]
+                        if len(col) == len(points):
+                            pc_colors = o3d.utility.Vector3dVector(col)
 
-                    pcd.points = o3d.utility.Vector3dVector(points)
-                    vis.clear_geometries()
-                    vis.add_geometry(pcd)
+                    if view_init:
+                        pcd.points = o3d.utility.Vector3dVector(points)
+                        if pc_colors is not None:
+                            pcd.colors = pc_colors
+                        vis.update_geometry(pcd)
+                    else:
+                        pcd.points = o3d.utility.Vector3dVector(points)
+                        if pc_colors is not None:
+                            pcd.colors = pc_colors
+                        vis.add_geometry(pcd)
+                        bounds = pcd.get_axis_aligned_bounding_box()
+                        center = bounds.get_center()
+                        vc = vis.get_view_control()
+                        vc.set_front([0, 0, 1])
+                        vc.set_lookat(center)
+                        vc.set_up([0, 1, 0])
+                        vc.set_zoom(0.5)
+                        view_init = True
 
                 vis.poll_events()
                 vis.update_renderer()
-
-                if not view_init and len(points) > 0:
-                    # 点在 +Z 方向，相机看向 +Z
-                    bounds = pcd.get_axis_aligned_bounding_box()
-                    center = bounds.get_center()
-                    vc = vis.get_view_control()
-                    vc.set_front([0, 0, 1])
-                    vc.set_lookat(center)
-                    vc.set_up([0, 1, 0])
-                    vc.set_zoom(0.5)
-                    view_init = True
 
             # 深度预览
             norm = np.clip((depth_mm.astype(np.int32) - 500) * 255 // 2500, 0, 255).astype(np.uint8)
