@@ -1,3 +1,12 @@
+# # 默认 JET（蓝-青-绿-黄-红）
+# python app/astra_pro/test_astra_pro_with_openni2.py
+
+# # TURBO（类似 JET 但更均匀）
+# python app/astra_pro/test_astra_pro_with_openni2.py --cmap TURBO
+
+# # 其他选项：HSV, HOT, BONE, RAINBOW, MAGMA, INFERNO, PLASMA, VIRIDIS
+# python app/astra_pro/test_astra_pro_with_openni2.py --cmap VIRIDIS
+
 from openni import openni2
 import numpy as np
 import cv2
@@ -10,7 +19,21 @@ DEVICE_INFO = {}
 WINDOW_NAME_DEPTH = 'Depth Image'
 WINDOW_NAME_COLOR = 'Color Image'
 WINDOW_NAME_IR = 'IR Image'
-COLOR_MAP_TYPE = 8  # 可以尝试不同的色彩映射, 有0~11种渲染的模式,8 色彩鲜艳，2的色彩正常，0和11为黑白色
+# 色彩映射方案
+COLORMAP_OPTIONS = {
+    'JET': cv2.COLORMAP_JET,
+    'TURBO': cv2.COLORMAP_TURBO,
+    'HSV': cv2.COLORMAP_HSV,
+    'HOT': cv2.COLORMAP_HOT,
+    'BONE': cv2.COLORMAP_BONE,
+    'RAINBOW': cv2.COLORMAP_RAINBOW,
+    'OCEAN': cv2.COLORMAP_OCEAN,
+    'MAGMA': cv2.COLORMAP_MAGMA,
+    'INFERNO': cv2.COLORMAP_INFERNO,
+    'PLASMA': cv2.COLORMAP_PLASMA,
+    'VIRIDIS': cv2.COLORMAP_VIRIDIS,
+}
+COLOR_MAP_TYPE = cv2.COLORMAP_JET  # 默认
 ALPHA_VALUE = 0.17
 MAX_DISTANCE_CM = 800  # 最大有效距离，单位为厘米
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -46,7 +69,12 @@ if __name__ == "__main__":
         parser.add_argument('--color-index', type=int, default=None,
                             help='OpenCV color device index to use (overrides auto-probe)')
         parser.add_argument('--out-dir', type=str, default='captures', help='Directory to save screenshots')
+        parser.add_argument('--cmap', type=str,
+                            default='JET',
+                            choices=list(COLORMAP_OPTIONS.keys()),
+                            help='Depth colormap: ' + ', '.join(COLORMAP_OPTIONS.keys()))
         args = parser.parse_args()
+        cmap = COLORMAP_OPTIONS[args.cmap.upper()]
 
         os.makedirs(args.out_dir, exist_ok=True)
 
@@ -113,7 +141,7 @@ if __name__ == "__main__":
             if hi <= lo:
                 hi = lo + 1
             dim_gray = np.clip((dpt - lo) * 255 // (hi - lo), 0, 255).astype(np.uint8)
-            depth_colormap = cv2.applyColorMap(dim_gray, cv2.COLORMAP_JET)
+            depth_colormap = cv2.applyColorMap(dim_gray, cmap)
             depth_colormap[dpt == 0] = (0, 0, 0)
 
             if click_x >= 0 and click_y >= 0 and (time.time() - last_click_time) < 5:
